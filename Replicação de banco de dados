@@ -1,0 +1,114 @@
+**Criando conta de Replicação**
+#Primeiramente deve-se criar uma conta de usuário com permissão de replicação para os servidores
+#tanto no master quanto no slave, ou seja,
+#o mesmo usuário criado para os servidores em questão. Aqui está como criar a conta de usuário,
+#que chamaremos de *replicacao*:
+
+
+#Criar usuario que será usado na replicação
+- CREATE USER REPLICACAO IDENTIFIED BY 'SENHA';
+
+#Dar permissão para a replicação acontecer
+- GRANT REPLICATION SLAVE ON . TO 'replicacao'@'%';
+
+#Para testar se está funcionando o usuário você pode tentar entrar no mysql com o usuario de replicação
+=====================================================================================================================
+#Foi criada esta conta de usuario no servidor master e no slave. Log em seguida foi dado as permissões 
+#de replicação (grant replication slave, replication client) para todas as bases de dados.
+
+**Configurando o Master**
+
+#Depois de criado as contas o próximo passo é ativar algumas configurações no master.
+#É preciso ativar o log binário e especificar um ID do servidor. Este passo é feito no aquivo de
+#configuração do mysql o “my.cnf” dentro do diretório “/etc”, para isso insira as seguintes linhas no arquivo:
+
+(para debian) nano /etc/mysql/mariadb.conf.d/50-server.cnf
+
+#Foi colocado as linhas abaixo:
+-------------------------------------------------------
+server-id               = 1
+user                    = mysql
+pid-file                = /run/mysqld/mysqld.pid
+socket                  = /var/run/mysqld/mysqld.sock
+basedir                 = /usr
+datadir                 = /var/lib/mysql
+tmpdir                  = /tmp
+lc-messages-dir         = /usr/share/mysql
+lc-messages             = en_US
+skip-external-locking
+
+log_bin = /var/log/mysql/mysql-bin.log
+log_bin_index =/var/log/mysql/mysql-bin.log.index
+relay_log = /var/log/mysql/mysql-relay-bin
+relay_log_index = /var/log/mysql/mysql-relay-bin.index
+-------------------------------------------------------
+
+#E comente estas 2 linhas abaixo para que o log que o slave irá ler nunca expire ou
+#Tenha algum limite de tamanho.
+
+#expire_logs_days        = 10
+#max_binlog_size        = 100M
+
+#Depois de realizado essa configuração no master é preciso reiniciar o mysql para o 
+#servidor ativar as configurações e criar os logs binários. 
+
+- systemctl restart mysql
+
+#Para verificar se o arquivo de log binário está criado no master execute o seguinte comando SHOW MASTER STATUS;
+
+
+**CONFIGURANDO O MASTER**
+
+#Seguindo no processo de configuração da replicação de dados no mysql, o servidor slave precisa ser configurado 
+#pelo arquivo de configuração do mysql (my.cnf), para isso insira as seguintes linhas no arquivo:
+
+(para debian) nano /etc/mysql/mariadb.conf.d/50-server.cnf
+
+Fazer estas alterações abaixo:
+
+log-bin = mysql-bin
+server-id = 2
+relay-log = mysql-relay-bin
+log-slave-updates = 1
+read_only = 1
+
+- systemctl restart mysql
+-----------------------------------
+
+**Primeiras 
+
+#Agora precisamos tirar um dump do banco e subir lá no slave para que ele tenhas o banco e as tabelas para escrever
+os dados que ele recebe pelo bin.log
+
+***TIRANDO DUMP DO BANCO ATUAL***
+- mysqldump -p -uroot --master_data --routines --events --single_transaction --databases zabbix --result-file arquivo_dump.sql
+
+***TRANSFERIR O DUMP PRO SLAVE***
+- scp arquivo_dump.sql root@IP_SLAVE:/root/
+
+***CONFIGURANDO REPLICA NO SLAVE***
+
+#Para podermos fazer a leitura dos bin logs na replicação precisamos saber qual é o MASTER_LOG_FILE e MASTER_LOG_POS.
+#Essas informações ficam no arquivo de dump e podem ser encontradas executando o comando:
+
+- head -n40 arquivo_dump.sql
+
+#Anote esses dados pois vamos usar e cadastra-los no usuario em seguida
+CHANGE MASTER TO MASTER_LOG_FILE='mysql-bin.000008', MASTER_LOG_POS=8646177;
+
+***SUBINDO O BANCO NO SLAVE***
+mysql -uroot < arquivo_dump.sql -p
+
+**INICIANDO O SERVIDOR SLAVE**
+
+#Para finalizar a configuração, o próximo passo é dizer ao slave como conectar-se ao master e começar a replicação.
+#Aqui é onde devemos colocar as informações de MASTER_LOG_FILE e MASTER_LOG_POS que pegamos vendo o head do dump no slave
+
+mysql> CHANGE MASTER TO MASTER_HOST='seu banco',
+    -> MASTER_USER='replicacao',
+    -> MASTER_PASSWORD='senha',
+    -> MASTER_LOG_FILE='mysql-bin.000001',
+    -> MASTER_LOG_POS=0;
+
+- START SLAVE;
+- SHOW SLAVE STATUS\G;
